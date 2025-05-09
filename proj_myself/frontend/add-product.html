@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Add Product</title>
     <link rel="stylesheet" href="styles.css">
+    <script defer src="script.js"></script>
 </head>
 <body>
     <nav>
@@ -12,7 +13,7 @@
         <a href="/pda"><button class="table-action-button">Back to PDA</button></a>
     </nav>
     <main>
-        <form id="add-product-form" action="/api/products" method="POST" enctype="multipart/form-data">
+        <form id="add-product-form" enctype="multipart/form-data">
             <h2>Add a New Product</h2>
             
             <label for="image">Product Image:</label>
@@ -27,14 +28,15 @@
             <label for="price">Price:</label>
             <input type="number" id="price" name="price" step="0.01" required>
             
-            <label for="quantity">Quantity:</label>
-            <input type="number" id="quantity" name="quantity" required>
+            <label for="inventory">Inventory:</label>
+            <input type="number" id="inventory" name="inventory" required>
             
             <label for="description">Description:</label>
             <textarea id="description" name="description" required></textarea>
             
             <button type="submit" class="table-action-button">Add Product</button>
         </form>
+        <p id="add-product-message" style="text-align: center; color: green; display: none;">Product added successfully!</p>
     </main>
 </body>
 </html>

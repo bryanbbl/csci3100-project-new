@@ -1,9 +1,13 @@
-from flask import Flask, jsonify, request, send_from_directory, session
+from flask import Flask, jsonify, request, send_from_directory, session, Response
 from pymongo import MongoClient
 from pymongo.errors import BulkWriteError, ServerSelectionTimeoutError
 import re
 from werkzeug.utils import secure_filename
 import os
+from bson.binary import Binary
+from flask import send_file
+import io
+from bson.objectid import ObjectId
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'  # Replace with a secure secret key
@@ -155,7 +159,7 @@ def serve_sda():
 def serve_pda():
     return send_from_directory('../frontend', 'pda.html')
 
-@app.route('/pda/add-product')
+@app.route('/add-product')
 def serve_add_product():
     return send_from_directory('../frontend', 'add-product.html')
 
@@ -273,8 +277,32 @@ def reset_password():
 
 @app.route('/api/products', methods=['GET'])
 def get_products():
-    products = list(products_collection.find({}, {"_id": 0}))
-    return jsonify(products)
+    try:
+        name = request.args.get('name')
+        if name:
+            product = products_collection.find_one({"name": name}, {"image": 0})
+            if product:
+                product["_id"] = str(product["_id"])
+                product["image_url"] = f"/api/products/image/{product['_id']}"
+                return jsonify({
+                    "name": product["name"],
+                    "category": product["category"],
+                    "price": product["price"],
+                    "inventory": product["inventory"],  # Updated field name
+                    "description": product["description"],
+                    "image_url": product["image_url"],
+                    "code": product["code"]  # Include product code
+                })
+            else:
+                return jsonify({"error": "Product not found"}), 404
+        else:
+            products = list(products_collection.find({}, {"image": 0}))
+            for product in products:
+                product["_id"] = str(product["_id"])
+                product["image_url"] = f"/api/products/image/{product['_id']}"
+            return jsonify(products)
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
 @app.route('/api/products', methods=['POST'])
 def add_product():
@@ -288,9 +316,8 @@ def add_product():
     if not image:
         return jsonify({"error": "Invalid image"}), 400
 
-    filename = secure_filename(image.filename)
-    image_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    image.save(image_path)
+    # Convert image to binary
+    image_binary = Binary(image.read())
 
     data = request.form
     name = data.get('name')
@@ -303,16 +330,109 @@ def add_product():
     if not all([name, category, price, quantity, description]):
         return jsonify({"error": "All fields are required"}), 400
 
+    # Generate the lowest available product code
+    existing_codes = products_collection.distinct("code")
+    existing_numbers = sorted(int(code.replace("product", "")) for code in existing_codes if code.startswith("product"))
+    product_number = 1
+    for number in existing_numbers:
+        if number != product_number:
+            break
+        product_number += 1
+    product_code = f"product{product_number}"
+
     try:
-        products_collection.insert_one({
-            "image": f"/static/uploads/{filename}",
+        # Store product with image binary in MongoDB
+        product_id = products_collection.insert_one({
+            "code": product_code,
+            "image": image_binary,
             "name": name,
             "category": category,
             "price": float(price),
             "quantity": int(quantity),
             "description": description
-        })
-        return jsonify({"message": "Product added successfully"}), 201
+        }).inserted_id
+        return jsonify({"message": "Product added successfully", "product_id": str(product_id)}), 201
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+
+@app.route('/api/products/image/<product_id>', methods=['GET'])
+def get_product_image(product_id):
+    try:
+        # Fetch the product by ID
+        product = products_collection.find_one({"_id": ObjectId(product_id)})
+        if not product or "image" not in product:
+            return jsonify({"error": "Image not found"}), 404
+
+        # Serve the image as a response
+        return Response(
+            product["image"],
+            mimetype="image/jpeg"  # Adjust MIME type if necessary
+        )
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+
+@app.route('/api/products/<product_code>', methods=['GET', 'PUT'])
+def manage_product(product_code):
+    if request.method == 'GET':
+        product = products_collection.find_one({"code": product_code}, {"image": 0})
+        if not product:
+            return jsonify({"error": "Product not found"}), 404
+        product["_id"] = str(product["_id"])
+        return jsonify(product)
+
+    if request.method == 'PUT':
+        data = request.json
+        update_fields = {
+            "name": data.get("name"),
+            "category": data.get("category"),
+            "price": float(data.get("price")),
+            "quantity": int(data.get("quantity")),
+            "description": data.get("description")
+        }
+        result = products_collection.update_one({"code": product_code}, {"$set": update_fields})
+        if result.matched_count == 0:
+            return jsonify({"error": "Product not found"}), 404
+        return jsonify({"message": "Product updated successfully"})
+
+@app.route('/api/products/<product_code>', methods=['PUT'])
+def update_product(product_code):
+    try:
+        data = request.json
+        update_fields = {
+            "name": data.get("name"),
+            "category": data.get("category"),
+            "price": float(data.get("price")),
+            "quantity": int(data.get("quantity")),
+            "description": data.get("description")
+        }
+
+        # Ensure all fields are provided
+        if not all(update_fields.values()):
+            return jsonify({"error": "All fields are required"}), 400
+
+        # Locate the product by its code
+        result = products_collection.update_one(
+            {"code": product_code},
+            {"$set": update_fields}
+        )
+
+        if result.matched_count == 0:
+            return jsonify({"error": "Product not found"}), 404
+
+        return jsonify({"message": "Product updated successfully"}), 200
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+
+@app.route('/api/products', methods=['DELETE'])
+def delete_products():
+    try:
+        data = request.json
+        product_ids = data.get('productIds', [])
+        if not product_ids:
+            return jsonify({"error": "No product IDs provided"}), 400
+
+        result = products_collection.delete_many({"_id": {"$in": [ObjectId(pid) for pid in product_ids]}})
+        return jsonify({"message": f"{result.deleted_count} product(s) deleted"}), 200
     except Exception as e:
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
@@ -387,6 +507,173 @@ def user_info():
 def logout():
     session.pop('username', None)  # Remove the username from the session
     return jsonify({"message": "Logged out successfully"}), 200
+
+@app.route('/all-products')
+def serve_all_products():
+    return send_from_directory('../frontend', 'all-products.html')
+
+@app.route('/search')
+def serve_search():
+    return send_from_directory('../frontend', 'search.html')
+
+@app.route('/product-details')
+def serve_product_details():
+    return send_from_directory('../frontend', 'product-details.html')
+
+# Wishlist routes
+@app.route('/api/wishlist', methods=['POST'])
+def add_to_wishlist():
+    if 'username' not in session:
+        return jsonify({"error": "User not logged in"}), 401
+    
+    data = request.json
+    print(f"Received data: {data}")  # Debugging log to check received data
+    product_code = data.get('product_code')  # Use product_code instead of product_id
+    username = session['username']
+    
+    if not product_code:
+        return jsonify({"error": "Product code is required"}), 400
+
+    product = products_collection.find_one({"code": product_code})
+    if not product:
+        return jsonify({"error": "Product not found"}), 404
+
+    wishlist_collection = db['wishlist']
+    if wishlist_collection.find_one({"product_code": product_code, "username": username}):
+        return jsonify({"error": "Product already in wishlist"}), 400
+
+    wishlist_collection.insert_one({"product_code": product_code, "username": username})
+    return jsonify({"message": "Product added to wishlist"}), 201
+
+@app.route('/api/wishlist', methods=['GET'])
+def get_wishlist():
+    if 'username' not in session:
+        return jsonify({"error": "User not logged in"}), 401
+
+    username = session['username']
+    wishlist_collection = db['wishlist']
+    wishlist = list(wishlist_collection.find({"username": username}, {"_id": 0, "product_code": 1}))
+
+    # Filter out documents without 'product_code'
+    product_codes = [item['product_code'] for item in wishlist if 'product_code' in item]
+
+    if not product_codes:
+        return jsonify([])  # Return an empty list if no valid product codes are found
+
+    products = list(products_collection.find({"code": {"$in": product_codes}}, {"image": 0}))
+    for product in products:
+        product["_id"] = str(product["_id"])
+        product["image_url"] = f"/api/products/image/{product['_id']}"
+
+    return jsonify(products)
+
+@app.route('/api/wishlist', methods=['DELETE'])
+def remove_from_wishlist():
+    if 'username' not in session:
+        return jsonify({"error": "User not logged in"}), 401
+
+    data = request.json
+    product_id = data.get('product_id')
+    username = session['username']
+
+    if not product_id:
+        return jsonify({"error": "Product ID is required"}), 400
+
+    wishlist_collection = db['wishlist']
+    result = wishlist_collection.delete_one({"product_id": product_id, "username": username})
+
+    if result.deleted_count == 0:
+        return jsonify({"error": "Product not found in wishlist"}), 404
+
+    return jsonify({"message": "Product removed from wishlist"}), 200
+
+@app.route('/api/shopping-cart', methods=['GET', 'POST'])
+def manage_cart():
+    if 'username' not in session:
+        return jsonify({"error": "User not logged in"}), 401
+
+    username = session['username']
+    cart_collection = db['shopping_cart']
+
+    if request.method == 'GET':
+        cart_items = list(cart_collection.find({"username": username}))
+        for item in cart_items:
+            product = products_collection.find_one({"code": item['product_code']})  # Use product_code
+            if not product:
+                continue  # Skip the cart item if the product is not found
+            item['product'] = {
+                "name": product['name'],
+                "price": product['price']
+            }
+            item['_id'] = str(item['_id'])  # Convert ObjectId to string
+        return jsonify(cart_items)
+
+    if request.method == 'POST':
+        data = request.json
+        product_code = data.get('product_code')
+        quantity = data.get('quantity')
+
+        if not product_code or quantity is None:
+            return jsonify({"error": "Product code and quantity are required"}), 400
+
+        try:
+            quantity = int(quantity)
+            if quantity < 1:
+                return jsonify({"error": "Quantity must be at least 1"}), 400
+        except ValueError:
+            return jsonify({"error": "Quantity must be a valid integer"}), 400
+
+        product = products_collection.find_one({"code": product_code})
+        if not product:
+            return jsonify({"error": "Product not found"}), 404
+
+        if quantity > product['inventory']:
+            return jsonify({"error": f"Requested quantity exceeds available inventory ({product['inventory']})"}), 400
+
+        cart_item = cart_collection.find_one({"username": username, "product_code": product_code})
+        if cart_item:
+            new_quantity = cart_item['quantity'] + quantity
+            if new_quantity > product['inventory']:
+                return jsonify({"error": f"Total quantity in cart exceeds available inventory ({product['inventory']})"}), 400
+            cart_collection.update_one(
+                {"_id": cart_item['_id']},
+                {"$inc": {"quantity": quantity}}
+            )
+        else:
+            cart_collection.insert_one({"username": username, "product_code": product_code, "quantity": quantity})
+
+        return jsonify({"message": "Product added to cart"}), 201
+
+@app.route('/api/shopping-cart/<item_id>', methods=['PUT', 'DELETE'])
+def update_or_delete_cart_item(item_id):
+    if 'username' not in session:
+        return jsonify({"error": "User not logged in"}), 401
+
+    username = session['username']
+    cart_collection = db['shopping_cart']
+
+    if request.method == 'PUT':
+        data = request.json
+        quantity = data.get('quantity')
+
+        if not quantity or quantity < 1:
+            return jsonify({"error": "Quantity must be at least 1"}), 400
+
+        cart_collection.update_one(
+            {"_id": ObjectId(item_id), "username": username},
+            {"$set": {"quantity": quantity}}
+        )
+        return jsonify({"message": "Cart item updated"}), 200
+
+    if request.method == 'DELETE':
+        result = cart_collection.delete_one({"_id": ObjectId(item_id), "username": username})
+        if result.deleted_count == 0:
+            return jsonify({"error": "Cart item not found"}), 404
+        return jsonify({"message": "Cart item deleted"}), 200
+
+@app.route('/shopping-cart')
+def serve_shopping_cart():
+    return send_from_directory('../frontend', 'shopping-cart.html')
 
 if __name__ == '__main__':
     app.run(debug=True)

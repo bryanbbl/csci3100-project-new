@@ -535,6 +535,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 alert('An unexpected error occurred.'); // Show error popup
             });
         });
+
+        const passwordInput = document.getElementById('password');
+        const togglePasswordButton = document.getElementById('toggle-password');
+
+        togglePasswordButton.addEventListener('click', () => {
+            if (passwordInput.type === 'text') {
+                passwordInput.type = 'password';
+                togglePasswordButton.textContent = 'Show';
+            } else {
+                passwordInput.type = 'text';
+                togglePasswordButton.textContent = 'Hide';
+            }
+        });
     }
 
     if (window.location.pathname === '/home') {
@@ -562,15 +575,365 @@ document.addEventListener('DOMContentLoaded', () => {
                 const productList = document.getElementById('product-list');
                 productList.innerHTML = products.map(product => `
                     <div class="product">
-                        <img src="${product.image}" alt="${product.name}" />
+                        <input type="checkbox" class="product-checkbox" data-id="${product._id}">
+                        <img src="${product.image_url}" alt="${product.name}" />
                         <h3>${product.name}</h3>
                         <p>Category: ${product.category}</p>
                         <p>Price: $${product.price.toFixed(2)}</p>
-                        <p>Quantity: ${product.quantity}</p>
-                        <p>${product.description}</p>
+                        <p>Inventory: ${product.inventory}</p>
+                        <p>Description: ${product.description}</p>
                     </div>
                 `).join('');
             })
             .catch(error => console.error('Error fetching products:', error));
+
+        const productDropdown = document.getElementById('product-dropdown');
+        const editName = document.getElementById('edit-name');
+        const editCategory = document.getElementById('edit-category');
+        const editPrice = document.getElementById('edit-price');
+        const editInventory = document.getElementById('edit-inventory');
+        const editDescription = document.getElementById('edit-description');
+        const editProductForm = document.getElementById('edit-product-form');
+
+        // Fetch products and populate the dropdown
+        fetch('/api/products')
+            .then(response => response.json())
+            .then(products => {
+                products.forEach(product => {
+                    const option = document.createElement('option');
+                    option.value = product.code; // Use product code as the value
+                    option.textContent = product.name;
+                    productDropdown.appendChild(option);
+                });
+
+                // Update fields when a product is selected
+                productDropdown.addEventListener('change', () => {
+                    const selectedProductCode = productDropdown.value;
+                    const selectedProduct = products.find(product => product.code === selectedProductCode);
+
+                    if (selectedProduct) {
+                        editName.value = selectedProduct.name;
+                        editCategory.value = selectedProduct.category;
+                        editPrice.value = selectedProduct.price;
+                        editInventory.value = selectedProduct.inventory;
+                        editDescription.value = selectedProduct.description;
+                    }
+                });
+            })
+            .catch(error => console.error('Error fetching products:', error));
+
+        // Handle "Confirm Edit" button
+        editProductForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+
+            const selectedProductCode = productDropdown.value;
+            const updatedProduct = {
+                name: editName.value.trim(),
+                category: editCategory.value.trim(),
+                price: parseFloat(editPrice.value),
+                inventory: parseInt(editInventory.value, 10),
+                description: editDescription.value.trim()
+            };
+
+            // Ensure all fields are filled
+            if (!selectedProductCode || Object.values(updatedProduct).some(value => !value)) {
+                alert('All fields must be filled.');
+                return;
+            }
+
+            fetch(`/api/products/${selectedProductCode}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updatedProduct)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert(`Error: ${data.error}`);
+                } else {
+                    alert('Successfully edited product!');
+                    window.location.reload(); // Reload the page to reflect changes
+                }
+            })
+            .catch(error => console.error('Error editing product:', error));
+        });
     }
+
+    if (window.location.pathname.startsWith('/product/')) {
+        const productCode = window.location.pathname.split('/').pop();
+        fetch(`/api/products/${productCode}`)
+            .then(response => response.json())
+            .then(product => {
+                document.body.innerHTML = `
+                    <form id="edit-product-form">
+                        <h2>Edit Product</h2>
+                        <label>Name:</label>
+                        <input type="text" id="name" value="${product.name}" required>
+                        <label>Category:</label>
+                        <input type="text" id="category" value="${product.category}" required>
+                        <label>Price:</label>
+                        <input type="number" id="price" value="${product.price}" step="0.01" required>
+                        <label>Inventory:</label>
+                        <input type="number" id="inventory" value="${product.inventory}" required>
+                        <label>Description:</label>
+                        <textarea id="description" required>${product.description}</textarea>
+                        <button type="submit">Confirm Edit</button>
+                        <button type="button" id="cancel-edit">Cancel</button>
+                    </form>
+                `;
+
+                document.getElementById('edit-product-form').addEventListener('submit', (event) => {
+                    event.preventDefault();
+                    const updatedProduct = {
+                        name: document.getElementById('name').value,
+                        category: document.getElementById('category').value,
+                        price: document.getElementById('price').value,
+                        inventory: document.getElementById('inventory').value,
+                        description: document.getElementById('description').value
+                    };
+
+                    fetch(`/api/products/${productCode}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(updatedProduct)
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) {
+                            alert(`Error: ${data.error}`);
+                        } else {
+                            alert('Product updated successfully!');
+                            window.location.href = '/pda';
+                        }
+                    })
+                    .catch(error => console.error('Error updating product:', error));
+                });
+
+                document.getElementById('cancel-edit').addEventListener('click', () => {
+                    window.location.href = '/pda';
+                });
+            })
+            .catch(error => console.error('Error fetching product details:', error));
+    }
+
+    const deleteProductsButton = document.getElementById('delete-products');
+    if (deleteProductsButton) {
+        deleteProductsButton.addEventListener('click', () => {
+            const selectedProducts = Array.from(document.querySelectorAll('.product-checkbox:checked'))
+                .map(checkbox => checkbox.dataset.id);
+
+            if (selectedProducts.length === 0) {
+                alert('No products selected for deletion.');
+                return;
+            }
+
+            fetch('/api/products', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ productIds: selectedProducts })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert(`Error: ${data.error}`);
+                } else {
+                    alert(data.message);
+                    window.location.reload();
+                }
+            })
+            .catch(error => console.error('Error deleting products:', error));
+        });
+    }
+
+    const addProductForm = document.getElementById('add-product-form');
+    if (addProductForm) {
+        addProductForm.addEventListener('submit', (event) => {
+            event.preventDefault(); // Prevent default form submission
+
+            const formData = new FormData(addProductForm);
+
+            fetch('/api/products', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert(`Error: ${data.error}`);
+                } else {
+                    alert('Successfully added product!');
+                    window.location.href = '/pda'; // Redirect to PDA page
+                }
+            })
+            .catch(error => {
+                console.error('Error adding product:', error);
+                alert('An unexpected error occurred. Please try again.');
+            });
+        });
+    }
+
+    if (productsDiv) {
+        fetch('/api/products')
+            .then(response => response.json())
+            .then(products => {
+                products.forEach(product => {
+                    const productElement = document.createElement('div');
+                    productElement.classList.add('product');
+
+                    // Create an image element
+                    const img = document.createElement('img');
+                    img.src = `/api/products/image/${product._id}`;
+                    img.alt = product.name;
+
+                    // Add product details
+                    const details = `
+                        <h3>${product.name}</h3>
+                        <p>Category: ${product.category}</p>
+                        <p>Price: $${product.price.toFixed(2)}</p>
+                        <p>Inventory: ${product.inventory}</p>
+                        <p>Description: ${product.description}</p>
+                    `;
+
+                    productElement.appendChild(img);
+                    productElement.innerHTML += details;
+                    productsDiv.appendChild(productElement);
+                });
+            })
+            .catch(error => console.error('Error fetching products:', error));
+    }
+
+    if (window.location.pathname === '/all-products') {
+        const categoryFilter = document.getElementById('category-filter');
+        const sortDropdown = document.getElementById('sort-dropdown');
+        const productList = document.getElementById('product-list');
+
+        // Fetch and display products
+        function fetchAndDisplayProducts() {
+            fetch('/api/products')
+                .then(response => response.json())
+                .then(products => {
+                    // Apply category filter
+                    const selectedCategory = categoryFilter.value;
+                    let filteredProducts = selectedCategory
+                        ? products.filter(product => product.category === selectedCategory)
+                        : products;
+
+                    // Apply sorting
+                    const sortOption = sortDropdown.value;
+                    if (sortOption === 'price-high-to-low') {
+                        filteredProducts.sort((a, b) => b.price - a.price);
+                    } else if (sortOption === 'price-low-to-high') {
+                        filteredProducts.sort((a, b) => a.price - b.price);
+                    }
+
+                    // Render products
+                    productList.innerHTML = filteredProducts.map(product => `
+                        <div class="product" data-name="${product.name}">
+                            <img src="${product.image_url}" alt="${product.name}" />
+                            <h3>${product.name}</h3>
+                            <p>Category: ${product.category}</p>
+                            <p>Price: $${product.price.toFixed(2)}</p>
+                            <p>Inventory: ${product.inventory}</p>
+                        </div>
+                    `).join('');
+                })
+                .catch(error => console.error('Error fetching products:', error));
+        }
+
+        // Populate category filter options
+        fetch('/api/products')
+            .then(response => response.json())
+            .then(products => {
+                const categories = [...new Set(products.map(product => product.category))];
+                categoryFilter.innerHTML += categories.map(category => `
+                    <option value="${category}">${category}</option>
+                `).join('');
+            })
+            .catch(error => console.error('Error fetching categories:', error));
+
+        // Add event listeners for filter and sort
+        categoryFilter.addEventListener('change', fetchAndDisplayProducts);
+        sortDropdown.addEventListener('change', fetchAndDisplayProducts);
+
+        // Initial fetch and display
+        fetchAndDisplayProducts();
+    }
+
+    // Handle search button click
+    const searchButton = document.getElementById('search-button');
+    const searchBox = document.getElementById('search-box');
+    if (searchButton && searchBox) {
+        searchButton.addEventListener('click', () => {
+            const keyword = searchBox.value.trim();
+            if (keyword) {
+                window.location.href = `/search?keyword=${encodeURIComponent(keyword)}`;
+            }
+        });
+    }
+
+    if (window.location.pathname === '/search') {
+        const urlParams = new URLSearchParams(window.location.search);
+        const keyword = urlParams.get('keyword');
+        const searchTitle = document.getElementById('search-title');
+        const searchResults = document.getElementById('search-results');
+
+        if (keyword) {
+            searchTitle.textContent = `Search for "${keyword}"`;
+
+            fetch('/api/products')
+                .then(response => response.json())
+                .then(products => {
+                    const filteredProducts = products.filter(product =>
+                        product.name.toLowerCase().includes(keyword.toLowerCase()) ||
+                        product.name.toLowerCase().startsWith(keyword.toLowerCase().slice(0, 3))
+                    );
+
+                    if (filteredProducts.length > 0) {
+                        searchResults.innerHTML = filteredProducts.map(product => `
+                            <div class="product" data-name="${product.name}">
+                                <img src="${product.image_url}" alt="${product.name}" />
+                                <h3>${product.name}</h3>
+                                <p>Category: ${product.category}</p>
+                                <p>Price: $${product.price.toFixed(2)}</p>
+                                <p>Inventory: ${product.inventory}</p>
+                            </div>
+                        `).join('');
+
+                        // Add click event listener to redirect to product-details
+                        searchResults.addEventListener('click', (event) => {
+                            const productContainer = event.target.closest('.product');
+                            if (productContainer) {
+                                const productName = productContainer.dataset.name;
+                                window.location.href = `/product-details?name=${encodeURIComponent(productName)}&keyword=${encodeURIComponent(keyword)}`;
+                            }
+                        });
+                    } else {
+                        searchResults.innerHTML = '<p>No products found.</p>';
+                    }
+                })
+                .catch(error => console.error('Error fetching products:', error));
+        }
+    }
+
+    if (window.location.pathname === '/product-details') {
+        const urlParams = new URLSearchParams(window.location.search);
+        const productName = urlParams.get('name');
+        const referrerKeyword = urlParams.get('keyword'); // Preserve the search keyword
+        const referrer = document.referrer;
+
+        // Set the back button to navigate to the referrer or default to "/search"
+        const backButton = document.getElementById('back-button');
+        backButton.addEventListener('click', () => {
+            if (referrer.includes('/search') || referrerKeyword) {
+                window.location.href = `/search?keyword=${encodeURIComponent(referrerKeyword || '')}`;
+            } else {
+                window.location.href = '/all-products';
+            }
+        });
+
+        if (productName) {
+            // ...existing code...
+        }
+    }
+
 });
