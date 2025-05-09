@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shopping Cart</title>
+    <link rel="stylesheet" href="styles.css">
+    <script defer src="script.js"></script>
+</head>
+<body>
+    <nav>
+        <h1>Shopping Cart</h1>
+        <div>
+            <a href="/home"><button>Back to Home</button></a>
+        </div>
+    </nav>
+    <main>
+        <table id="cart-table" style="width: 100%; border-collapse: collapse; margin-bottom: 2rem;">
+            <thead>
+                <tr>
+                    <th>Product Name</th>
+                    <th>Price</th>
+                    <th>Quantity</th>
+                    <th>Total</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Cart items will be dynamically loaded here -->
+            </tbody>
+        </table>
+        <div style="text-align: right; font-size: 1.5rem;">
+            <strong>Total Order Price: $<span id="total-price">0.00</span></strong>
+        </div>
+    </main>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const cartTableBody = document.querySelector('#cart-table tbody');
+            const totalPriceElement = document.getElementById('total-price');
+
+            function loadCart() {
+                fetch('/api/shopping-cart')
+                    .then(response => response.json())
+                    .then(cartItems => {
+                        cartTableBody.innerHTML = '';
+                        let totalPrice = 0;
+
+                        cartItems.forEach(item => {
+                            const row = document.createElement('tr');
+                            const itemTotal = item.quantity * item.product.price;  // Use 'quantity' field
+                            totalPrice += itemTotal;
+
+                            row.innerHTML = `
+                                <td>${item.product.name}</td>
+                                <td>$${item.product.price.toFixed(2)}</td>
+                                <td>
+                                    <input type="number" value="${item.quantity}" min="1" data-id="${item._id}" class="cart-quantity" style="width: 50px; text-align: center;">
+                                </td>
+                                <td>$${itemTotal.toFixed(2)}</td>
+                                <td>
+                                    <button class="delete-item" data-id="${item._id}" style="padding: 0.5rem;">Delete</button>
+                                </td>
+                            `;
+                            cartTableBody.appendChild(row);
+                        });
+
+                        totalPriceElement.textContent = totalPrice.toFixed(2);
+                    })
+                    .catch(error => console.error('Error loading cart:', error));
+            }
+
+            cartTableBody.addEventListener('change', (event) => {
+                if (event.target.classList.contains('cart-quantity')) {
+                    const itemId = event.target.dataset.id;
+                    const newQuantity = parseInt(event.target.value, 10);
+
+                    fetch(`/api/shopping-cart/${itemId}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ quantity: newQuantity })  // Use 'quantity' field
+                    })
+                    .then(response => response.json())
+                    .then(() => loadCart())
+                    .catch(error => console.error('Error updating quantity:', error));
+                }
+            });
+
+            cartTableBody.addEventListener('click', (event) => {
+                if (event.target.classList.contains('delete-item')) {
+                    const itemId = event.target.dataset.id;
+
+                    fetch(`/api/shopping-cart/${itemId}`, { method: 'DELETE' })
+                        .then(response => response.json())
+                        .then(() => loadCart())
+                        .catch(error => console.error('Error deleting item:', error));
+                }
+            });
+
+            loadCart();
+        });
+    </script>
+</body>
+</html>
