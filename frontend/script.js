@@ -6,6 +6,27 @@ document.addEventListener('DOMContentLoaded', () => {
     const loginMessage = document.getElementById('login-message');
     const registerMessage = document.getElementById('register-message');
 
+    // Function to check if the user is logged in
+    function checkLogin() {
+        const allowedPaths = ['/', '/register', '/forget'];
+        if (!allowedPaths.includes(window.location.pathname)) {
+            fetch('/api/user-info', { method: 'GET' })
+                .then(response => {
+                    if (response.status === 401) {
+                        alert('You must be logged in to access this page.');
+                        window.location.href = '/';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error checking login status:', error);
+                    window.location.href = '/';
+                });
+        }
+    }
+
+    // Call the login check function on page load
+    checkLogin();
+
     // Handle login type toggle
     const loginTitle = document.getElementById('login-title');
     const loginTypeRadios = document.getElementsByName('login-type');
@@ -27,17 +48,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             console.log(`Attempting login: Type=${loginType}, Username=${username}`); // Debugging log
 
-            let endpoint;
-            if (loginType === 'user') {
-                endpoint = '/api/login';
-            } else if (loginType === 'sda-admin' || loginType === 'pda-admin') {
-                endpoint = '/api/login-admin';
-            }
-
-            fetch(endpoint, {
+            fetch('/api/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password })
+                body: JSON.stringify({ username, password, loginType }) // Include loginType in the request
             })
             .then(response => response.json().then(data => ({ status: response.status, body: data })))
             .then(({ status, body }) => {
@@ -426,6 +440,39 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
                 .catch((error) => console.error('Error updating data:', error));
         });
+
+        // Handle "Confirm" button click for editing license keys
+        confirmEditButton.addEventListener('click', () => {
+            if (!editRow || editMode !== 'key') return;
+
+            const updatedKey = editRow.children[0].textContent.trim();
+            const updatedStatus = editRow.children[1].querySelector('select').value === 'Active';
+
+            fetch('/api/sda/license-keys', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    originalKey: originalLicenseKey,
+                    key: updatedKey,
+                    active: updatedStatus
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert(`Error: ${data.error}`);
+                    window.location.reload(); // Refresh the page to discard false changes
+                } else {
+                    alert('License key updated successfully!');
+                    window.location.reload();
+                }
+            })
+            .catch(error => {
+                console.error('Error updating license key:', error);
+                window.location.reload(); // Refresh the page in case of unexpected errors
+            });
+        });
+
     }
 
     if (window.location.pathname === '/addlicense') {
