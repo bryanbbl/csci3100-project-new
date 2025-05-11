@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, send_from_directory, session, Response
+from flask import Flask, jsonify, request, send_from_directory, session, Response, redirect, url_for, make_response
 from pymongo import MongoClient
 from pymongo.errors import BulkWriteError, ServerSelectionTimeoutError
 import re
@@ -28,6 +28,9 @@ try:
 
     # Ensure license keys exist in the database
     try:
+        # Create a unique index on the 'key' field to enforce uniqueness
+        license_keys_collection.create_index("key", unique=True)
+
         existing_keys = license_keys_collection.find({}, {"key": 1, "_id": 0})
         existing_keys_set = {key["key"] for key in existing_keys}
 
@@ -52,9 +55,12 @@ except ServerSelectionTimeoutError as e:
     exit(1)
 
 # Pre-set admin accounts
-admins = {
+sda_admins = {
     "SDA1": "SDA999",
-    "PDA1": "PDA999"
+}
+
+pda_admins = {
+    "PDA1": "PDA999",
 }
 
 @app.route('/')
@@ -76,6 +82,10 @@ def serve_forget():
 @app.route('/<path:path>')
 def serve_static_files(path):
     return send_from_directory('../frontend', path)
+
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    return send_from_directory('../frontend/static', filename)
 
 @app.route('/api/register', methods=['POST'])
 def register():
@@ -124,32 +134,98 @@ def login():
 
     username = data.get('username')
     password = data.get('password')
+    login_type = data.get('loginType')  # Capture the login type
 
-    if not username or not password:
-        print("Error: Missing username or password")  # Debugging log
-        return jsonify({"error": "Username and password are required"}), 400
+    if not username or not password or not login_type:
+        print("Error: Missing username, password, or login type")  # Debugging log
+        return jsonify({"error": "Username, password, and login type are required"}), 400
 
-    user = users_collection.find_one({"username": username, "password": password})
-    if not user:
-        print("Error: Invalid username or password")  # Debugging log
-        return jsonify({"error": "Invalid username or password"}), 401
+    if login_type == 'user':
+        user = users_collection.find_one({"username": username, "password": password})
+        if not user:
+            print("Error: Invalid username or password")  # Debugging log
+            return jsonify({"error": "Invalid username or password"}), 401
+        session['username'] = username
+        session['loginType'] = 'user'  # Store login type in session
+        print("User login successful")  # Debugging log
+        return jsonify({"message": "Login successful"}), 200
 
-    # Store the logged-in user's username in the session
-    session['username'] = username
-    print("Login successful")  # Debugging log
-    return jsonify({"message": "Login successful"}), 200
+    elif login_type == 'sda-admin' and username.startswith('SDA') and sda_admins.get(username) == password:
+        session['username'] = username
+        session['loginType'] = 'sda-admin'  # Store login type in session
+        print("SDA Admin login successful")  # Debugging log
+        return jsonify({"message": "SDA Admin login successful"}), 200
 
-@app.route('/api/login-admin', methods=['POST'])
-def admin_login():
+    elif login_type == 'pda-admin' and username.startswith('PDA') and pda_admins.get(username) == password:
+        session['username'] = username
+        session['loginType'] = 'pda-admin'  # Store login type in session
+        print("PDA Admin login successful")  # Debugging log
+        return jsonify({"message": "PDA Admin login successful"}), 200
+
+    print("Error: Invalid credentials or login type")  # Debugging log
+    return jsonify({"error": "Invalid credentials or login type"}), 401
+
+@app.before_request
+def restrict_access():
+    restricted_paths = {
+        'user': ['/sda', '/pda', '/add-product', '/addlicense'],
+        'sda-admin': ['/pda', '/add-product', '/home', '/register', '/forget', '/all-products', '/search', '/product-details', '/shopping-cart', '/user-info'],
+        'pda-admin': ['/sda', '/addlicense', '/home', '/register', '/forget', '/all-products', '/search', '/product-details', '/shopping-cart', '/user-info']
+    }
+
+    # Allow access to static files
+    if request.path.endswith(('.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.ico')):
+        return
+
+    login_type = session.get('loginType')
+    if not login_type:
+        # Redirect to login page with a popup message
+        if request.path not in ['/', '/register', '/forget', '/api/login', '/api/register', '/api/forget', '/api/reset-password']:
+            response = make_response(f"""
+                <script>
+                    alert("Session expired. Please log in again.");
+                    window.location.href = document.referrer || '/';
+                </script>
+            """)
+            return response
+    else:
+        for restricted_path in restricted_paths.get(login_type, []):
+            if request.path.startswith(restricted_path):
+                response = make_response(f"""
+                    <script>
+                        alert("You are not allowed to access that page.");
+                        window.location.href = document.referrer || '/';
+                    </script>
+                """)
+                return response
+
+@app.route('/api/login-sda-admin', methods=['POST'])
+def sda_admin_login():
     data = request.json
     username = data.get('username')
     password = data.get('password')
 
-    if username not in admins or admins[username] != password:
+    # Validate admin credentials and ensure correct role
+    if username.startswith('SDA') and sda_admins.get(username) == password:
+        session['username'] = username
+    else:
         return jsonify({"error": "Invalid admin credentials"}), 401
 
-    # Simplify response without redirect logic
-    return jsonify({"message": "Admin login successful"}), 200
+    return jsonify({"message": "SDA Admin login successful"}), 200
+
+@app.route('/api/login-pda-admin', methods=['POST'])
+def pda_admin_login():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+
+    # Validate admin credentials and ensure correct role
+    if username.startswith('PDA') and pda_admins.get(username) == password:
+        session['username'] = username
+    else:
+        return jsonify({"error": "Invalid admin credentials"}), 401
+
+    return jsonify({"message": "PDA Admin login successful"}), 200
 
 @app.route('/sda')
 def serve_sda():
@@ -224,6 +300,10 @@ def update_license_key():
 
     if not original_key or not key or active is None:
         return jsonify({"error": "Original key, new key, and active status are required"}), 400
+
+    # Check for duplicate key
+    if license_keys_collection.find_one({"key": key, "key": {"$ne": original_key}}):
+        return jsonify({"error": "Duplicate license key detected"}), 400
 
     # Update the license key by matching the original key
     result = license_keys_collection.update_one(
@@ -505,7 +585,7 @@ def user_info():
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
-    session.pop('username', None)  # Remove the username from the session
+    session.clear()  # Clear the session completely
     return jsonify({"message": "Logged out successfully"}), 200
 
 @app.route('/all-products')
