@@ -19,6 +19,10 @@
         <div id="notification-area" style="margin-bottom: 2rem; padding: 1rem; background-color: #f9f9f9; border-radius: 5px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);">
             <h2>Notifications</h2>
             <ul id="notifications-list" style="list-style-type: none; padding: 0;"></ul>
+            <h3>Order Notifications</h3>
+            <ul id="order-notifications-list" style="list-style-type: none; padding: 0;"></ul>
+            <h3>Cancel Notifications</h3>
+            <ul id="cancel-notifications-list" style="list-style-type: none; padding: 0;"></ul>
         </div>
 
         <form id="user-info-form">
@@ -76,16 +80,60 @@
     </main>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            // Fetch and display notifications
-            fetch('/api/notifications')
+            // Fetch and display order notifications
+            fetch('/api/order-notifications')
                 .then(response => response.json())
-                .then(notifications => {
-                    const notificationsList = document.getElementById('notifications-list');
-                    notificationsList.innerHTML = notifications.map(notification => `
-                        <li>Your ${notification.noti_type} is ${notification.noti_update}</li>
+                .then(orderNotifications => {
+                    const orderNotificationsList = document.getElementById('order-notifications-list');
+                    orderNotificationsList.innerHTML = orderNotifications.map(notification => `
+                        <li>
+                            Your order is ${notification.order_update} - ${notification.order_id} - ${notification.order_time}
+                            <button class="dismiss-notification" data-id="${notification.onoti_id}">Dismiss</button>
+                        </li>
                     `).join('');
                 })
-                .catch(error => console.error('Error fetching notifications:', error));
+                .catch(error => console.error('Error fetching order notifications:', error));
+
+            // Fetch and display cancel notifications
+            fetch('/api/cancel-notifications')
+                .then(response => response.json())
+                .then(cancelNotifications => {
+                    const cancelNotificationsList = document.getElementById('cancel-notifications-list');
+                    cancelNotificationsList.innerHTML = cancelNotifications.map(notification => `
+                        <li>
+                            Your cancel request is ${notification.cancel_update} - ${notification.cancel_id} - ${notification.cancel_time}
+                            <button class="dismiss-notification" data-id="${notification.cnoti_id}">Dismiss</button>
+                        </li>
+                    `).join('');
+                })
+                .catch(error => console.error('Error fetching cancel notifications:', error));
+
+            // Handle dismiss notification
+            document.addEventListener('click', (event) => {
+                if (event.target.classList.contains('dismiss-notification')) {
+                    const notiId = event.target.dataset.id;
+                    const isOrderNotification = event.target.closest('#order-notifications-list') !== null;
+
+                    const apiEndpoint = isOrderNotification ? '/api/order-notifications' : '/api/cancel-notifications';
+                    const requestBody = isOrderNotification ? { onoti_id: notiId } : { cnoti_id: notiId };
+
+                    fetch(apiEndpoint, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(requestBody)
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) {
+                            alert(`Error: ${data.error}`);
+                        } else {
+                            alert(data.message);
+                            window.location.reload(); // Reload to update notifications
+                        }
+                    })
+                    .catch(error => console.error('Error dismissing notification:', error));
+                }
+            });
 
             fetch('/api/wishlist')
                 .then(response => response.json())

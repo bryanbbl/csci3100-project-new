@@ -74,5 +74,48 @@
             </div>
         </form>
     </main>
+    <script>
+        // document.addEventListener('DOMContentLoaded', () => {
+        //     const orderForm = document.getElementById('order-form');
+        //     const emailInput = document.getElementById('email');
+        //     const addressInput = document.getElementById('address');
+
+        //     orderForm.addEventListener('submit', (event) => {
+        //         event.preventDefault();
+
+        //         const email = emailInput.value.trim();
+        //         const address = addressInput.value.trim();
+        //         const shippingMethod = document.querySelector('input[name="shipping_method"]:checked').value;
+        //         const paymentMethod = document.querySelector('input[name="payment_method"]:checked').value;
+
+        //         if (paymentMethod === 'credit_card') {
+        //             const cardNumber = document.getElementById('card-number').value.trim();
+        //             const expiryDate = document.getElementById('expiry-date').value.trim();
+        //             const cvs = document.getElementById('cvs').value.trim();
+
+        //             if (!/^\d{16}$/.test(cardNumber) || !/^\d{3}$/.test(cvs) || !expiryDate) {
+        //                 alert('Invalid credit card details.');
+        //                 return;
+        //             }
+        //         }
+
+        //         fetch('/api/order', {
+        //             method: 'POST',
+        //             headers: { 'Content-Type': 'application/json' },
+        //             body: JSON.stringify({ email, address, shipping_method: shippingMethod, payment_method: paymentMethod })
+        //         })
+        //         .then(response => response.json())
+        //         .then(data => {
+        //             if (data.error) {
+        //                 alert(`Error: ${data.error}`);
+        //             } else {
+        //                 alert('Order placed! You can check the details on the user info page.');
+        //                 window.location.href = '/user-info';
+        //             }
+        //         })
+        //         .catch(error => console.error('Error placing order:', error));
+        //     });
+        // });
+    </script>
 </body>
 </html>
