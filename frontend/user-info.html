@@ -16,6 +16,11 @@
     </nav>
 
     <main>
+        <div id="notification-area" style="margin-bottom: 2rem; padding: 1rem; background-color: #f9f9f9; border-radius: 5px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);">
+            <h2>Notifications</h2>
+            <ul id="notifications-list" style="list-style-type: none; padding: 0;"></ul>
+        </div>
+
         <form id="user-info-form">
             <h2>Your Information</h2>
             <label for="username" style="display: flex; align-items: center;">
@@ -49,10 +54,39 @@
                 <!-- Wishlist items will be dynamically loaded here -->
             </div>
         </section>
+
+        <section id="orders-section">
+            <h2>Your Orders</h2>
+            <div class="scrollable-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Order ID</th>
+                            <th>Order Time</th>
+                            <th>Total Value</th>
+                            <th>Delivery Status</th> <!-- Add Delivery Status column -->
+                        </tr>
+                    </thead>
+                    <tbody id="orders-table-body">
+                        <!-- Orders will be dynamically loaded here -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
     </main>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            // ...existing code...
+            // Fetch and display notifications
+            fetch('/api/notifications')
+                .then(response => response.json())
+                .then(notifications => {
+                    const notificationsList = document.getElementById('notifications-list');
+                    notificationsList.innerHTML = notifications.map(notification => `
+                        <li>Your ${notification.noti_type} is ${notification.noti_update}</li>
+                    `).join('');
+                })
+                .catch(error => console.error('Error fetching notifications:', error));
+
             fetch('/api/wishlist')
                 .then(response => response.json())
                 .then(products => {
@@ -66,6 +100,21 @@
                     `).join('');
                 })
                 .catch(error => console.error('Error fetching wishlist:', error));
+
+            fetch('/api/orders')
+                .then(response => response.json())
+                .then(orders => {
+                    const ordersTableBody = document.getElementById('orders-table-body');
+                    ordersTableBody.innerHTML = orders.map(order => `
+                        <tr>
+                            <td><a href="/order-details?order_id=${encodeURIComponent(order.order_id)}">${order.order_id}</a></td>
+                            <td>${order.order_time}</td>
+                            <td>$${order.total_value.toFixed(2)}</td>
+                            <td>${order.delivery_status}</td> <!-- Display Delivery Status -->
+                        </tr>
+                    `).join('');
+                })
+                .catch(error => console.error('Error fetching orders:', error));
         });
     </script>
 </body>

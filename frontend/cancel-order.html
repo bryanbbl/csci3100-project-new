@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cancel Order</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <nav>
+        <h1>Cancel Order</h1>
+    </nav>
+    <main>
+        <form id="cancel-order-form">
+            <h2>Cancel Order</h2>
+            <p><strong>Order ID:</strong> <span id="order-id"></span></p>
+            <p><strong>Order Time:</strong> <span id="order-time"></span></p>
+            <label for="cancel-reason">Reason for Cancellation:</label>
+            <textarea id="cancel-reason" required></textarea>
+            <button type="submit" style="padding: 0.5rem 1rem; background-color: #8b0000; color: white; border: none; border-radius: 5px;">Confirm Submit</button>
+        </form>
+    </main>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const orderId = urlParams.get('order_id');
+            const orderTime = urlParams.get('order_time');
+
+            document.getElementById('order-id').textContent = orderId;
+            document.getElementById('order-time').textContent = orderTime;
+
+            document.getElementById('cancel-order-form').addEventListener('submit', (event) => {
+                event.preventDefault();
+                const reason = document.getElementById('cancel-reason').value;
+
+                fetch('/api/cancel-order', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ order_id: orderId, reason })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert(`Error: ${data.error}`);
+                    } else {
+                        alert('Cancel request submitted! Please wait for further notice.');
+                        window.location.href = '/user-info';
+                    }
+                })
+                .catch(error => console.error('Error submitting cancel request:', error));
+            });
+        });
+    </script>
+</body>
+</html>

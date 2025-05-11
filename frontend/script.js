@@ -172,16 +172,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Fetch products
-    fetch('/api/products')
-        .then(response => response.json())
-        .then(products => {
-            products.forEach(product => {
-                const productElement = document.createElement('div');
-                productElement.textContent = `${product.name} - $${product.price}`;
-                productsDiv.appendChild(productElement);
-            });
-        })
-        .catch(error => console.error('Error fetching products:', error));
+    if (productsDiv) { // Check if productsDiv exists
+        fetch('/api/products')
+            .then(response => response.json())
+            .then(products => {
+                products.forEach(product => {
+                    const productElement = document.createElement('div');
+                    productElement.textContent = `${product.name} - $${product.price}`;
+                    productsDiv.appendChild(productElement);
+                });
+            })
+            .catch(error => console.error('Error fetching products:', error));
+    }
 
     // Fetch and display registered users and license keys on the SDA page
     if (window.location.pathname === '/sda') {
@@ -824,12 +826,17 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(response => response.json())
             .then(products => {
                 products.forEach(product => {
+                    if (!product._id) {
+                        console.error('Product ID is missing:', product);
+                        return; // Skip products without an ID
+                    }
+
                     const productElement = document.createElement('div');
                     productElement.classList.add('product');
 
                     // Create an image element
                     const img = document.createElement('img');
-                    img.src = `/api/products/image/${product._id}`;
+                    img.src = `/api/products/image/${product._id}`; // Use product._id for the image URL
                     img.alt = product.name;
 
                     // Add product details
@@ -981,6 +988,114 @@ document.addEventListener('DOMContentLoaded', () => {
         if (productName) {
             // ...existing code...
         }
+    }
+
+    if (window.location.pathname === '/place-order') {
+        const orderForm = document.getElementById('order-form');
+        const emailInput = document.getElementById('email');
+        const addressInput = document.getElementById('address');
+        const creditCardFields = document.getElementById('credit-card-fields');
+        const paymeQr = document.getElementById('payme-qr');
+        const cancelOrderButton = document.getElementById('cancel-order');
+        const summaryItems = document.getElementById('summary-items');
+        const totalItemsElement = document.getElementById('total-items');
+        const totalValueElement = document.getElementById('total-value');
+
+        // Fetch user info to pre-fill email and address
+        fetch('/api/user-info')
+            .then(response => response.json())
+            .then(data => {
+                if (data.email) emailInput.value = data.email;
+                if (data.address) addressInput.value = data.address;
+            })
+            .catch(error => console.error('Error fetching user info:', error));
+
+        // Load order summary
+        fetch('/api/shopping-cart')
+            .then(response => response.json())
+            .then(cartItems => {
+                let totalItems = 0;
+                let totalValue = 0;
+
+                summaryItems.innerHTML = cartItems.map(item => {
+                    totalItems += item.quantity;
+                    totalValue += item.quantity * item.product.price;
+
+                    const productId = item.product._id; // Ensure product ID is correctly referenced
+
+                    return `
+                        <div style="display: flex; align-items: center; margin-bottom: 1rem; gap: 1rem;">
+                            <img src="/api/products/image/${productId}" alt="${item.product.name}" style="width: 50px; height: 50px; object-fit: cover; border-radius: 5px;">
+                            <div>
+                                <p><strong>${item.product.name}</strong></p>
+                                <p>Quantity: ${item.quantity}</p>
+                                <p>Price: $${item.product.price.toFixed(2)}</p>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                totalItemsElement.textContent = totalItems;
+                totalValueElement.textContent = totalValue.toFixed(2);
+            })
+            .catch(error => console.error('Error loading order summary:', error));
+
+        // Toggle payment method fields
+        document.getElementsByName('payment_method').forEach(radio => {
+            radio.addEventListener('change', () => {
+                if (radio.value === 'credit_card') {
+                    creditCardFields.style.display = 'block';
+                    paymeQr.style.display = 'none';
+                } else if (radio.value === 'payme') {
+                    creditCardFields.style.display = 'none';
+                    paymeQr.style.display = 'block';
+                }
+            });
+        });
+
+        // Handle cancel button
+        cancelOrderButton.addEventListener('click', () => {
+            if (confirm('Do you confirm to cancel?')) {
+                window.location.href = '/shopping-cart';
+            }
+        });
+
+        // Handle order submission
+        orderForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+
+            const email = emailInput.value.trim();
+            const address = addressInput.value.trim();
+            const shippingMethod = document.querySelector('input[name="shipping_method"]:checked').value;
+            const paymentMethod = document.querySelector('input[name="payment_method"]:checked').value;
+
+            if (paymentMethod === 'credit_card') {
+                const cardNumber = document.getElementById('card-number').value.trim();
+                const expiryDate = document.getElementById('expiry-date').value.trim();
+                const cvs = document.getElementById('cvs').value.trim();
+
+                if (!/^\d{16}$/.test(cardNumber) || !/^\d{3}$/.test(cvs) || !expiryDate) {
+                    alert('Invalid credit card details.');
+                    return;
+                }
+            }
+
+            fetch('/api/order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, address, shipping_method: shippingMethod, payment_method: paymentMethod })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert(`Error: ${data.error}`);
+                    } else {
+                        alert('Order placed! You can check the details on the user info page.');
+                        window.location.href = '/user-info';
+                    }
+                })
+                .catch(error => console.error('Error placing order:', error));
+        });
     }
 
 });
