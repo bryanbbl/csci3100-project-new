@@ -304,13 +304,17 @@ def update_license_key():
     if not original_key or not key or active is None:
         return jsonify({"error": "Original key, new key, and active status are required"}), 400
 
-    # Check for duplicate key
-    if license_keys_collection.find_one({"key": key, "key": {"$ne": original_key}}):
+    # Check for duplicate key, excluding the original key
+    original_key_document = license_keys_collection.find_one({"key": original_key})
+    if not original_key_document:
+        return jsonify({"error": "Original license key not found"}), 404
+
+    if license_keys_collection.find_one({"key": key, "_id": {"$ne": original_key_document["_id"]}}):
         return jsonify({"error": "Duplicate license key detected"}), 400
 
     # Update the license key by matching the original key
     result = license_keys_collection.update_one(
-        {"key": original_key},
+        {"_id": original_key_document["_id"]},
         {"$set": {"key": key, "active": active}}
     )
 
@@ -869,10 +873,11 @@ def manage_orders():
         for order in orders:
             order["order_time"] = order["order_time"].strftime("%Y-%m-%d %H:%M:%S")
             order_items = list(orderitems_collection.find({"order_id": order["order_id"]}, {"_id": 0}))
-            total_value = sum(
-                item["quantity"] * products_collection.find_one({"code": item["product_code"]}, {"price": 1})["price"]
-                for item in order_items
-            )
+            total_value = 0
+            for item in order_items:
+                product = products_collection.find_one({"code": item["product_code"]}, {"price": 1})
+                if product:
+                    total_value += item["quantity"] * product["price"]
             order["total_value"] = round(total_value, 2)
         return jsonify(orders)
 
@@ -884,16 +889,24 @@ def manage_orders():
         if not order_id or delivery_status not in ["processing", "delivering", "arrived"]:
             return jsonify({"error": "Invalid order ID or delivery status"}), 400
 
+        # Fetch the order document
+        order = orders_collection.find_one({"order_id": order_id})
+        if not order:
+            return jsonify({"error": "Order not found"}), 404
+
+        # Update the delivery status
         result = orders_collection.update_one({"order_id": order_id}, {"$set": {"delivery_status": delivery_status}})
         if result.matched_count == 0:
             return jsonify({"error": "Order not found"}), 404
 
         # Add notification
-        noti_id = db['notifications'].count_documents({}) + 1
-        db['notifications'].insert_one({
-            "noti_id": noti_id,
-            "noti_type": "order",
-            "noti_update": delivery_status
+        onoti_id = db['order_noti'].count_documents({}) + 1
+        db['order_noti'].insert_one({
+            "onoti_id": onoti_id,
+            "order_id": order_id,
+            "username": order["username"],
+            "order_time": order["order_time"].strftime("%Y-%m-%d %H:%M:%S"),
+            "order_update": delivery_status
         })
 
         return jsonify({"message": "Delivery status updated successfully"}), 200
@@ -927,6 +940,9 @@ def serve_cancel_order():
 
 @app.route('/api/cancel-order', methods=['POST'])
 def cancel_order():
+    if 'username' not in session:
+        return jsonify({"error": "User not logged in"}), 401
+
     data = request.json
     order_id = data.get('order_id')
     reason = data.get('reason')
@@ -946,9 +962,11 @@ def cancel_order():
 
     # Record the cancellation
     cancel_time = datetime.now()
+    username = session['username']  # Get the logged-in user's username
     db['cancellations'].insert_one({
         "cancel_id": cancel_id,
         "order_id": order_id,
+        "username": username,  # Include the username
         "cancel_time": cancel_time,
         "reason": reason
     })
@@ -957,10 +975,12 @@ def cancel_order():
 
 @app.route('/api/cancel-requests', methods=['GET', 'POST'])
 def manage_cancel_requests():
-    # Ensure no local variable shadows the Flask `request` object
     if request.method == 'GET':
         cancel_requests = list(db['cancellations'].find({}, {"_id": 0}))
-        for cancel_request in cancel_requests:  # Rename local variable to avoid conflict
+        for cancel_request in cancel_requests:
+            # Fetch the username from the orders collection
+            order = orders_collection.find_one({"order_id": cancel_request["order_id"]}, {"username": 1})
+            cancel_request["username"] = order["username"] if order else "Unknown"
             cancel_request["cancel_time"] = cancel_request["cancel_time"].strftime("%Y-%m-%d %H:%M:%S")
         return jsonify(cancel_requests)
 
@@ -977,23 +997,177 @@ def manage_cancel_requests():
             return jsonify({"error": "Cancel request not found"}), 404
 
         if action == "approve":
-            orders_collection.delete_one({"order_id": cancel_request["order_id"]})
+            # Restore inventory for related products
+            order_id = cancel_request["order_id"]
+            order_items = list(orderitems_collection.find({"order_id": order_id}))
+            for item in order_items:
+                products_collection.update_one(
+                    {"code": item["product_code"]},
+                    {"$inc": {"inventory": item["quantity"]}}
+                )
+            # Delete the order
+            orders_collection.delete_one({"order_id": order_id})
+            orderitems_collection.delete_many({"order_id": order_id})
+
+        # Delete the cancel request
         db['cancellations'].delete_one({"cancel_id": cancel_id})
 
-        # Add notification
-        noti_id = db['notifications'].count_documents({}) + 1
-        db['notifications'].insert_one({
-            "noti_id": noti_id,
-            "noti_type": "cancel request",
-            "noti_update": "approved" if action == "approve" else "denied"
+        # Add cancel notification
+        cnoti_id = db['cancel_noti'].count_documents({}) + 1
+        db['cancel_noti'].insert_one({
+            "cnoti_id": cnoti_id,
+            "cancel_id": cancel_id,
+            "username": cancel_request["username"],
+            "cancel_time": cancel_request["cancel_time"].strftime("%Y-%m-%d %H:%M:%S"),
+            "cancel_update": "approved" if action == "approve" else "denied"
         })
 
         return jsonify({"message": f"Cancel request {action} successfully"}), 200
 
-@app.route('/api/notifications', methods=['GET'])
-def get_notifications():
-    notifications = list(db['notifications'].find({}, {"_id": 0}))
-    return jsonify(notifications)
+@app.route('/api/cancel-requests', methods=['GET'])
+def get_cancel_requests():
+    cancel_requests = list(db['cancellations'].find({}, {"_id": 0}))
+    for cancel_request in cancel_requests:
+        order = orders_collection.find_one({"order_id": cancel_request["order_id"]}, {"username": 1})
+        cancel_request["username"] = order["username"] if order else "Unknown"
+        cancel_request["cancel_time"] = cancel_request["cancel_time"].strftime("%Y-%m-%d %H:%M:%S")
+    return jsonify(cancel_requests)
+
+@app.route('/api/orders', methods=['GET'])
+def get_all_orders():
+    orders = list(orders_collection.find({}, {"_id": 0}))
+    for order in orders:
+        order["order_time"] = order["order_time"].strftime("%Y-%m-%d %H:%M:%S")
+        order_items = list(orderitems_collection.find({"order_id": order["order_id"]}, {"_id": 0}))
+        order["items"] = [
+            {
+                "product_code": item["product_code"],
+                "quantity": item["quantity"],
+                "product_name": products_collection.find_one({"code": item["product_code"]}, {"name": 1})["name"]
+                if products_collection.find_one({"code": item["product_code"]}) else "Unknown"
+            }
+            for item in order_items
+        ]
+        order["total_value"] = sum(
+            item["quantity"] * products_collection.find_one({"code": item["product_code"]}, {"price": 1})["price"]
+            if products_collection.find_one({"code": item["product_code"]}) else 0
+            for item in order_items
+        )
+    return jsonify(orders)
+
+@app.route('/api/pda/orders', methods=['GET'])
+def get_all_orders_for_pda():
+    if 'username' not in session or session.get('loginType') != 'pda-admin':
+        return jsonify({"error": "Unauthorized access"}), 403
+
+    orders = list(orders_collection.find({}, {"_id": 0}))
+    for order in orders:
+        order["order_time"] = order["order_time"].strftime("%Y-%m-%d %H:%M:%S")
+        order_items = list(orderitems_collection.find({"order_id": order["order_id"]}, {"_id": 0}))
+        total_value = sum(
+            item["quantity"] * products_collection.find_one({"code": item["product_code"]}, {"price": 1})["price"]
+            for item in order_items if products_collection.find_one({"code": item["product_code"]})
+        )
+        order["total_value"] = round(total_value, 2)
+    return jsonify(orders)
+
+@app.route('/api/order-notifications', methods=['GET', 'DELETE'])
+def manage_order_notifications():
+    if 'username' not in session:
+        return jsonify({"error": "User not logged in"}), 401
+
+    username = session['username']
+
+    if request.method == 'GET':
+        notifications = list(db['order_noti'].find({"username": username}, {"_id": 0}))
+        return jsonify(notifications)
+
+    if request.method == 'DELETE':
+        data = request.json
+        onoti_id = data.get('onoti_id')  # Use correct field name for order notification ID
+        if not onoti_id:
+            return jsonify({"error": "Notification ID is required"}), 400
+
+        result = db['order_noti'].delete_one({"onoti_id": int(onoti_id), "username": username})
+        if result.deleted_count == 0:
+            return jsonify({"error": "Notification not found"}), 404
+
+        return jsonify({"message": "Order notification dismissed successfully"}), 200
+
+@app.route('/api/cancel-notifications', methods=['GET', 'DELETE'])
+def manage_cancel_notifications():
+    if 'username' not in session:
+        return jsonify({"error": "User not logged in"}), 401
+
+    username = session['username']
+
+    if request.method == 'GET':
+        notifications = list(db['cancel_noti'].find({"username": username}, {"_id": 0}))
+        return jsonify(notifications)
+
+    if request.method == 'DELETE':
+        data = request.json
+        cnoti_id = data.get('cnoti_id')  # Use correct field name for cancel notification ID
+        if not cnoti_id:
+            return jsonify({"error": "Notification ID is required"}), 400
+
+        result = db['cancel_noti'].delete_one({"cnoti_id": int(cnoti_id), "username": username})
+        if result.deleted_count == 0:
+            return jsonify({"error": "Notification not found"}), 404
+
+        return jsonify({"message": "Cancel notification dismissed successfully"}), 200
+
+@app.route('/api/orders', methods=['PUT'])
+def update_order_status():
+    data = request.json
+    order_id = data.get('order_id')
+    delivery_status = data.get('delivery_status')
+
+    if not order_id or delivery_status not in ["processing", "delivering", "arrived"]:
+        return jsonify({"error": "Invalid order ID or delivery status"}), 400
+
+    order = orders_collection.find_one({"order_id": order_id})
+    if not order:
+        return jsonify({"error": "Order not found"}), 404
+
+    orders_collection.update_one({"order_id": order_id}, {"$set": {"delivery_status": delivery_status}})
+
+    # Add order notification
+    onoti_id = db['order_noti'].count_documents({}) + 1
+    db['order_noti'].insert_one({
+        "onoti_id": onoti_id,
+        "order_id": order_id,
+        "username": order["username"],
+        "order_time": order["order_time"].strftime("%Y-%m-%d %H:%M:%S"),
+        "order_update": delivery_status
+    })
+
+    return jsonify({"message": "Delivery status updated successfully"}), 200
+
+@app.route('/api/cancel-requests', methods=['POST'])
+def handle_cancel_request():
+    data = request.json
+    cancel_id = data.get('cancel_id')
+    action = data.get('action')
+
+    if not cancel_id or action not in ["approve", "deny"]:
+        return jsonify({"error": "Invalid cancel ID or action"}), 400
+
+    cancel_request = db['cancellations'].find_one({"cancel_id": cancel_id})
+    if not cancel_request:
+        return jsonify({"error": "Cancel request not found"}), 404
+
+    # Add cancel notification
+    cnoti_id = db['cancel_noti'].count_documents({}) + 1
+    db['cancel_noti'].insert_one({
+        "cnoti_id": cnoti_id,
+        "cancel_id": cancel_id,
+        "username": cancel_request["username"],
+        "cancel_time": cancel_request["cancel_time"].strftime("%Y-%m-%d %H:%M:%S"),
+        "cancel_update": "approved" if action == "approve" else "denied"
+    })
+
+    return jsonify({"message": f"Cancel request {action} successfully"}), 200
 
 if __name__ == '__main__':
     app.run(debug=True)
