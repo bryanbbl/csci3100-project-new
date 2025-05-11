@@ -6,6 +6,20 @@
     <title>PDA - Manage Products</title>
     <link rel="stylesheet" href="styles.css">
     <script defer src="script.js"></script>
+    <style>
+        .approve-cancel, .deny-cancel {
+            background-color: #ffcccc; /* Light red */
+            color: black;
+            border: 1px solid #ff6666; /* Slightly darker red border */
+            padding: 0.5rem 1rem;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        .approve-cancel:hover, .deny-cancel:hover {
+            background-color: #ff9999; /* Darker red on hover */
+        }
+    </style>
 </head>
 <body>
     <nav>
@@ -58,6 +72,146 @@
 
             <button type="submit">Confirm Edit</button>
         </form>
+
+        <section>
+            <h2>All Orders</h2>
+            <div class="scrollable-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Order ID</th>
+                            <th>Username</th>
+                            <th>Total Value</th>
+                            <th>Order Time</th>
+                            <th>Delivery Status</th>
+                            <th>Edit</th>
+                        </tr>
+                    </thead>
+                    <tbody id="orders-table-body"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section>
+            <h2>Cancel Requests</h2>
+            <div class="scrollable-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Cancel ID</th>
+                            <th>Order ID</th>
+                            <th>Username</th>
+                            <th>Cancel Time</th>
+                            <th>Reason</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cancel-requests-table-body"></tbody>
+                </table>
+            </div>
+        </section>
     </main>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            fetch('/api/products')
+                .then(response => response.json())
+                .then(products => {
+                    const productList = document.getElementById('product-list');
+                    productList.innerHTML = products.map(product => `
+                        <div class="product">
+                            <input type="checkbox" class="product-checkbox" data-id="${product._id}">
+                            <img src="${product.image_url}" alt="${product.name}" />
+                            <h3>${product.name}</h3>
+                            <p>Category: ${product.category}</p>
+                            <p>Price: $${product.price.toFixed(2)}</p>
+                            <p>Inventory: ${product.inventory}</p>
+                            <p>Description: ${product.description}</p>
+                        </div>
+                    `).join('');
+                })
+                .catch(error => console.error('Error fetching products:', error));
+
+            // Fetch and display orders
+            fetch('/api/orders')
+                .then(response => response.json())
+                .then(orders => {
+                    const ordersTableBody = document.getElementById('orders-table-body');
+                    ordersTableBody.innerHTML = orders.map(order => `
+                        <tr>
+                            <td>${order.order_id}</td>
+                            <td>${order.username}</td>
+                            <td>$${order.total_value.toFixed(2)}</td>
+                            <td>${order.order_time}</td>
+                            <td>
+                                <select data-order-id="${order.order_id}" class="delivery-status-dropdown">
+                                    <option value="processing" ${order.delivery_status === "processing" ? "selected" : ""}>Processing</option>
+                                    <option value="delivering" ${order.delivery_status === "delivering" ? "selected" : ""}>Delivering</option>
+                                    <option value="arrived" ${order.delivery_status === "arrived" ? "selected" : ""}>Arrived</option>
+                                </select>
+                            </td>
+                            <td><button class="confirm-edit" data-order-id="${order.order_id}">Confirm</button></td>
+                        </tr>
+                    `).join('');
+                });
+
+            // Fetch and display cancel requests
+            fetch('/api/cancel-requests')
+                .then(response => response.json())
+                .then(cancelRequests => {
+                    const cancelRequestsTableBody = document.getElementById('cancel-requests-table-body');
+                    cancelRequestsTableBody.innerHTML = cancelRequests.map(request => `
+                        <tr>
+                            <td>${request.cancel_id}</td>
+                            <td>${request.order_id}</td>
+                            <td>${request.username}</td>
+                            <td>${request.cancel_time}</td>
+                            <td>${request.reason}</td>
+                            <td>
+                                <button class="approve-cancel" data-cancel-id="${request.cancel_id}">Approve</button>
+                                <button class="deny-cancel" data-cancel-id="${request.cancel_id}">Deny</button>
+                            </td>
+                        </tr>
+                    `).join('');
+                });
+
+            // Handle delivery status updates
+            document.addEventListener('click', (event) => {
+                if (event.target.classList.contains('confirm-edit')) {
+                    const orderId = event.target.dataset.orderId;
+                    const dropdown = document.querySelector(`.delivery-status-dropdown[data-order-id="${orderId}"]`);
+                    const deliveryStatus = dropdown.value;
+
+                    fetch('/api/orders', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ order_id: orderId, delivery_status: deliveryStatus })
+                    })
+                    .then(response => response.json())
+                    .then(data => alert(data.message))
+                    .catch(error => console.error('Error updating delivery status:', error));
+                }
+            });
+
+            // Handle cancel request actions
+            document.addEventListener('click', (event) => {
+                if (event.target.classList.contains('approve-cancel') || event.target.classList.contains('deny-cancel')) {
+                    const cancelId = event.target.dataset.cancelId;
+                    const action = event.target.classList.contains('approve-cancel') ? 'approve' : 'deny';
+
+                    fetch('/api/cancel-requests', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ cancel_id: cancelId, action })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message);
+                        window.location.reload(); // Reload the page to reflect changes
+                    })
+                    .catch(error => console.error('Error processing cancel request:', error));
+                }
+            });
+        });
+    </script>
 </body>
 </html>

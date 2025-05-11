@@ -53,6 +53,22 @@
         document.addEventListener('DOMContentLoaded', () => {
             const productList = document.getElementById('product-list');
 
+            fetch('/api/products')
+                .then(response => response.json())
+                .then(products => {
+                    const visibleProducts = products.filter(product => product.inventory > 0);
+                    productList.innerHTML = visibleProducts.map(product => `
+                        <div class="product" data-name="${product.name}">
+                            <img src="${product.image_url}" alt="${product.name}" />
+                            <h3>${product.name}</h3>
+                            <p>Category: ${product.category}</p>
+                            <p>Price: $${product.price.toFixed(2)}</p>
+                            <p>Inventory: ${product.inventory}</p>
+                        </div>
+                    `).join('');
+                })
+                .catch(error => console.error('Error fetching products:', error));
+
             productList.addEventListener('click', (event) => {
                 const productContainer = event.target.closest('.product');
                 if (productContainer) {

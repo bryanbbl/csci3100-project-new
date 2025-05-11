@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Order Details</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <nav>
+        <h1>Order Details</h1>
+        <a href="/user-info"><button>Back to User Info</button></a>
+    </nav>
+    <main>
+        <section id="order-summary">
+            <h2>Order Summary</h2>
+            <p><strong>Order ID:</strong> <span id="order-id"></span></p>
+            <p><strong>Order Time:</strong> <span id="order-time"></span></p>
+            <p><strong>Total Value:</strong> $<span id="order-total"></span></p>
+        </section>
+        <section id="order-items">
+            <h2>Order Items</h2>
+            <div id="items-list">
+                <!-- Order items will be dynamically loaded here -->
+            </div>
+        </section>
+        <div style="margin-top: 2rem; display: flex; gap: 1rem;">
+            <button id="print-invoice" style="padding: 0.5rem 1rem; background-color: #8b0000; color: white; border: none; border-radius: 5px;">Print Invoice</button>
+            <button id="cancel-order" style="padding: 0.5rem 1rem; background-color: #ff6666; color: white; border: 2px solid black; border-radius: 5px;">Cancel Order</button>
+        </div>
+    </main>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const orderId = urlParams.get('order_id');
+
+            if (orderId) {
+                fetch(`/api/order-details?order_id=${encodeURIComponent(orderId)}`)
+                    .then(response => response.json())
+                    .then(order => {
+                        document.getElementById('order-id').textContent = order.order_id;
+                        document.getElementById('order-time').textContent = order.order_time;
+                        document.getElementById('order-total').textContent = order.items.reduce((total, item) => total + item.quantity * item.product.price, 0).toFixed(2);
+
+                        const itemsList = document.getElementById('items-list');
+                        itemsList.innerHTML = order.items.map(item => `
+                            <div style="margin-bottom: 1rem;">
+                                <p><strong>${item.product.name}</strong></p>
+                                <p>Quantity: ${item.quantity}</p>
+                                <p>Price: $${item.product.price.toFixed(2)}</p>
+                            </div>
+                        `).join('');
+
+                        // Handle "Print Invoice" button
+                        document.getElementById('print-invoice').addEventListener('click', () => {
+                            const invoiceContent = `
+------------------------------ ${order.order_id} ------------------------------
+Order Time ---------------------------- ${order.order_time}
+User Name ----------------------------- ${order.username}
+email --------------------------------- ${order.email}
+address ------------------------------- ${order.address}
+
+${order.items.map(item => `
+product ------------------------------- ${item.product.name}
+quantity ------------------------------ ${item.quantity}
+`).join('')}
+----------------------------------------------------------------------
+Total Value --------------------------- $${order.items.reduce((total, item) => total + item.quantity * item.product.price, 0).toFixed(2)}
+                            `;
+                            const blob = new Blob([invoiceContent], { type: 'text/plain' });
+                            const link = document.createElement('a');
+                            link.href = URL.createObjectURL(blob);
+                            link.download = `${order.order_id}_invoice.txt`;
+                            link.click();
+                        });
+
+                        // Handle "Cancel Order" button
+                        document.getElementById('cancel-order').addEventListener('click', () => {
+                            window.location.href = `/cancel-order?order_id=${encodeURIComponent(order.order_id)}&order_time=${encodeURIComponent(order.order_time)}`;
+                        });
+                    })
+                    .catch(error => console.error('Error fetching order details:', error));
+            }
+        });
+    </script>
+</body>
+</html>

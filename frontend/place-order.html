@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Place Order</title>
+    <link rel="stylesheet" href="styles.css">
+    <script defer src="script.js"></script>
+</head>
+<body>
+    <nav>
+        <h1>Place Order</h1>
+    </nav>
+    <main style="display: flex; gap: 2rem;">
+        <!-- Order Summary Section -->
+        <section id="order-summary" style="flex: 1; background-color: #f9f9f9; padding: 1rem; border-radius: 10px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);">
+            <h2>Order Summary</h2>
+            <div id="summary-items" style="margin-bottom: 1rem;">
+                <!-- Items will be dynamically loaded here -->
+            </div>
+            <p><strong>Total Items:</strong> <span id="total-items">0</span></p>
+            <p><strong>Total Value:</strong> $<span id="total-value">0.00</span></p>
+        </section>
+
+        <!-- Order Form Section -->
+        <form id="order-form" style="flex: 1; background-color: #8b0000; color: #ffffff; padding: 1rem; border-radius: 10px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);">
+            <h2>Order Details</h2>
+            <label for="email">Email:</label>
+            <input type="email" id="email" required>
+
+            <label for="address">Address:</label>
+            <input type="text" id="address" required>
+
+            <label>Shipping Method:</label>
+            <div style="display: flex; gap: 1rem;">
+                <div>
+                    <input type="radio" id="shipping-person" name="shipping_method" value="by_person" required>
+                    <label for="shipping-person">By Person</label>
+                </div>
+                <div>
+                    <input type="radio" id="shipping-address" name="shipping_method" value="ship_to_address" required>
+                    <label for="shipping-address">Ship to Address</label>
+                </div>
+            </div>
+
+            <label>Payment Method:</label>
+            <div style="display: flex; gap: 1rem;">
+                <div>
+                    <input type="radio" id="payment-credit" name="payment_method" value="credit_card" required>
+                    <label for="payment-credit">Credit Card</label>
+                </div>
+                <div>
+                    <input type="radio" id="payment-payme" name="payment_method" value="payme" required>
+                    <label for="payment-payme">PayMe</label>
+                </div>
+            </div>
+
+            <div id="credit-card-fields" style="display: none; margin-top: 1rem;">
+                <label for="card-number">Card Number:</label>
+                <input type="text" id="card-number" pattern="\d{16}" placeholder="16-digit number">
+                <label for="expiry-date">Expiry Date:</label>
+                <input type="text" id="expiry-date" placeholder="MM/YY">
+                <label for="cvs">CVS:</label>
+                <input type="text" id="cvs" pattern="\d{3}" placeholder="3-digit number">
+            </div>
+
+            <div id="payme-qr" style="display: none; margin-top: 1rem;">
+                <img src="{{ url_for('static', filename='uploads/payme_qr.png') }}" alt="PayMe QR Code" style="width: 200px;">
+            </div>
+
+            <div style="margin-top: 1rem;">
+                <button type="button" id="cancel-order">Cancel</button>
+                <button type="submit">Confirm Order</button>
+            </div>
+        </form>
+    </main>
+</body>
+</html>

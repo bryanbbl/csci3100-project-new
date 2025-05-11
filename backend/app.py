@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, send_from_directory, session, Response, redirect, url_for, make_response
+from flask import Flask, jsonify, request, send_from_directory, session, Response, redirect, url_for, make_response, render_template
 from pymongo import MongoClient
 from pymongo.errors import BulkWriteError, ServerSelectionTimeoutError
 import re
@@ -8,8 +8,9 @@ from bson.binary import Binary
 from flask import send_file
 import io
 from bson.objectid import ObjectId
+from datetime import datetime
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder='../frontend')
 app.secret_key = 'your_secret_key'  # Replace with a secure secret key
 
 # Configure upload folder
@@ -25,6 +26,8 @@ try:
     users_collection = db['users']
     license_keys_collection = db['license_keys']
     products_collection = db['products']
+    orders_collection = db['orders']
+    orderitems_collection = db['orderitems']
 
     # Ensure license keys exist in the database
     try:
@@ -362,7 +365,7 @@ def get_products():
         if name:
             product = products_collection.find_one({"name": name}, {"image": 0})
             if product:
-                product["_id"] = str(product["_id"])
+                product["_id"] = str(product["_id"])  # Ensure _id is converted to string
                 product["image_url"] = f"/api/products/image/{product['_id']}"
                 return jsonify({
                     "name": product["name"],
@@ -376,9 +379,10 @@ def get_products():
             else:
                 return jsonify({"error": "Product not found"}), 404
         else:
-            products = list(products_collection.find({}, {"image": 0}))
+            query = {} if session.get('loginType') == 'pda-admin' else {"inventory": {"$gt": 0}}
+            products = list(products_collection.find(query, {"image": 0}))
             for product in products:
-                product["_id"] = str(product["_id"])
+                product["_id"] = str(product["_id"])  # Ensure _id is converted to string
                 product["image_url"] = f"/api/products/image/{product['_id']}"
             return jsonify(products)
     except Exception as e:
@@ -403,11 +407,11 @@ def add_product():
     name = data.get('name')
     category = data.get('category')
     price = data.get('price')
-    quantity = data.get('quantity')
+    inventory = data.get('inventory')
     description = data.get('description')
 
     # Validate all fields
-    if not all([name, category, price, quantity, description]):
+    if not all([name, category, price, inventory, description]):
         return jsonify({"error": "All fields are required"}), 400
 
     # Generate the lowest available product code
@@ -428,7 +432,7 @@ def add_product():
             "name": name,
             "category": category,
             "price": float(price),
-            "quantity": int(quantity),
+            "inventory": int(inventory),
             "description": description
         }).inserted_id
         return jsonify({"message": "Product added successfully", "product_id": str(product_id)}), 201
@@ -466,7 +470,7 @@ def manage_product(product_code):
             "name": data.get("name"),
             "category": data.get("category"),
             "price": float(data.get("price")),
-            "quantity": int(data.get("quantity")),
+            "inventory": int(data.get("inventory")),
             "description": data.get("description")
         }
         result = products_collection.update_one({"code": product_code}, {"$set": update_fields})
@@ -482,7 +486,7 @@ def update_product(product_code):
             "name": data.get("name"),
             "category": data.get("category"),
             "price": float(data.get("price")),
-            "quantity": int(data.get("quantity")),
+            "inventory": int(data.get("inventory")),
             "description": data.get("description")
         }
 
@@ -546,11 +550,25 @@ def user_info():
         user = users_collection.find_one({"username": current_username}, {"_id": 0})
         if not user:
             return jsonify({"error": "User not found"}), 404
+
+        # Fetch user orders
+        orders = list(orders_collection.find({"username": current_username}, {"_id": 0}))
+        for order in orders:
+            order["order_time"] = order["order_time"].strftime("%Y-%m-%d %H:%M:%S")  # Format date
+            order_items = list(orderitems_collection.find({"order_id": order["order_id"]}, {"_id": 0}))
+            total_value = sum(
+                item["quantity"] * products_collection.find_one({"code": item["product_code"]})["price"]
+                for item in order_items
+            )
+            order["total_value"] = round(total_value, 2)
+            order["delivery_status"] = order.get("delivery_status", "unknown")  # Include delivery_status
+
         return jsonify({
             "username": user["username"],
             "password": user["password"],
             "email": user.get("email", ""),
-            "address": user.get("address", "")
+            "address": user.get("address", ""),
+            "orders": orders  # Include user orders
         })
 
     if request.method == 'PUT':
@@ -754,6 +772,228 @@ def update_or_delete_cart_item(item_id):
 @app.route('/shopping-cart')
 def serve_shopping_cart():
     return send_from_directory('../frontend', 'shopping-cart.html')
+
+@app.route('/place-order')
+def serve_place_order():
+    return render_template('place-order.html')
+
+@app.route('/api/order', methods=['POST'])
+def place_order():
+    if 'username' not in session:
+        return jsonify({"error": "User not logged in"}), 401
+
+    data = request.json
+    username = session['username']
+    email = data.get('email')
+    address = data.get('address')
+    shipping_method = data.get('shipping_method')
+    payment_method = data.get('payment_method')
+    cart_items = list(db['shopping_cart'].find({"username": username}))
+
+    if not all([email, address, shipping_method, payment_method]):
+        return jsonify({"error": "All fields are required"}), 400
+
+    if not cart_items:
+        return jsonify({"error": "Shopping cart is empty"}), 400
+
+    # Generate the next order ID
+    existing_orders = orders_collection.distinct("order_id")
+    existing_numbers = sorted(int(order.replace("order_", "")) for order in existing_orders if order.startswith("order_"))
+    order_number = 1
+    for number in existing_numbers:
+        if number != order_number:
+            break
+        order_number += 1
+    order_id = f"order_{order_number:02d}"
+
+    # Record the order
+    order_time = datetime.now()
+    orders_collection.insert_one({
+        "order_id": order_id,
+        "username": username,
+        "email": email,
+        "address": address,
+        "shipping_method": shipping_method,
+        "payment_method": payment_method,
+        "order_time": order_time,
+        "delivery_status": "processing"  # Add delivery_status field
+    })
+
+    # Record order items and update inventory
+    for item in cart_items:
+        product_code = item['product_code']
+        quantity = item['quantity']
+        product = products_collection.find_one({"code": product_code})
+
+        if not product or product['inventory'] < quantity:
+            return jsonify({"error": f"Insufficient inventory for product {product_code}"}), 400
+
+        orderitems_collection.insert_one({
+            "order_id": order_id,
+            "product_code": product_code,
+            "quantity": quantity
+        })
+
+        # Deduct inventory
+        products_collection.update_one(
+            {"code": product_code},
+            {"$inc": {"inventory": -quantity}}
+        )
+
+    # Clear shopping cart
+    db['shopping_cart'].delete_many({"username": username})
+
+    return jsonify({"message": "Order placed successfully", "order_id": order_id}), 201
+
+@app.route('/api/orders', methods=['GET'])
+def get_user_orders():
+    if 'username' not in session:
+        return jsonify({"error": "User not logged in"}), 401
+
+    username = session['username']
+    orders = list(orders_collection.find({"username": username}, {"_id": 0}))
+    for order in orders:
+        order["order_time"] = order["order_time"].strftime("%Y-%m-%d %H:%M:%S")  # Format date
+        order_items = list(orderitems_collection.find({"order_id": order["order_id"]}, {"_id": 0}))
+        total_value = sum(
+            item["quantity"] * products_collection.find_one({"code": item["product_code"]})["price"]
+            for item in order_items
+        )
+        order["total_value"] = round(total_value, 2)
+    return jsonify(orders)
+
+@app.route('/api/orders', methods=['GET', 'PUT'])
+def manage_orders():
+    if request.method == 'GET':
+        orders = list(orders_collection.find({}, {"_id": 0}))
+        for order in orders:
+            order["order_time"] = order["order_time"].strftime("%Y-%m-%d %H:%M:%S")
+            order_items = list(orderitems_collection.find({"order_id": order["order_id"]}, {"_id": 0}))
+            total_value = sum(
+                item["quantity"] * products_collection.find_one({"code": item["product_code"]}, {"price": 1})["price"]
+                for item in order_items
+            )
+            order["total_value"] = round(total_value, 2)
+        return jsonify(orders)
+
+    if request.method == 'PUT':
+        data = request.json
+        order_id = data.get('order_id')
+        delivery_status = data.get('delivery_status')
+
+        if not order_id or delivery_status not in ["processing", "delivering", "arrived"]:
+            return jsonify({"error": "Invalid order ID or delivery status"}), 400
+
+        result = orders_collection.update_one({"order_id": order_id}, {"$set": {"delivery_status": delivery_status}})
+        if result.matched_count == 0:
+            return jsonify({"error": "Order not found"}), 404
+
+        # Add notification
+        noti_id = db['notifications'].count_documents({}) + 1
+        db['notifications'].insert_one({
+            "noti_id": noti_id,
+            "noti_type": "order",
+            "noti_update": delivery_status
+        })
+
+        return jsonify({"message": "Delivery status updated successfully"}), 200
+
+@app.route('/api/order-details', methods=['GET'])
+def get_order_details():
+    order_id = request.args.get('order_id')
+    if not order_id:
+        return jsonify({"error": "Order ID is required"}), 400
+
+    order = orders_collection.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        return jsonify({"error": "Order not found"}), 404
+
+    order_items = list(orderitems_collection.find({"order_id": order_id}, {"_id": 0}))
+    for item in order_items:
+        product = products_collection.find_one({"code": item["product_code"]}, {"_id": 0, "image": 0})
+        item["product"] = product
+
+    order["items"] = order_items
+    order["order_time"] = order["order_time"].strftime("%Y-%m-%d %H:%M:%S")  # Format date
+    return jsonify(order)
+
+@app.route('/order-details')
+def serve_order_details():
+    return send_from_directory('../frontend', 'order-details.html')
+
+@app.route('/cancel-order')
+def serve_cancel_order():
+    return send_from_directory('../frontend', 'cancel-order.html')
+
+@app.route('/api/cancel-order', methods=['POST'])
+def cancel_order():
+    data = request.json
+    order_id = data.get('order_id')
+    reason = data.get('reason')
+
+    if not order_id or not reason:
+        return jsonify({"error": "Order ID and reason are required"}), 400
+
+    # Generate the next cancel ID
+    existing_cancels = db['cancellations'].distinct("cancel_id")
+    existing_numbers = sorted(int(cancel.replace("cancel_", "")) for cancel in existing_cancels if cancel.startswith("cancel_"))
+    cancel_number = 1
+    for number in existing_numbers:
+        if number != cancel_number:
+            break
+        cancel_number += 1
+    cancel_id = f"cancel_{cancel_number:02d}"
+
+    # Record the cancellation
+    cancel_time = datetime.now()
+    db['cancellations'].insert_one({
+        "cancel_id": cancel_id,
+        "order_id": order_id,
+        "cancel_time": cancel_time,
+        "reason": reason
+    })
+
+    return jsonify({"message": "Cancel request submitted"}), 201
+
+@app.route('/api/cancel-requests', methods=['GET', 'POST'])
+def manage_cancel_requests():
+    # Ensure no local variable shadows the Flask `request` object
+    if request.method == 'GET':
+        cancel_requests = list(db['cancellations'].find({}, {"_id": 0}))
+        for cancel_request in cancel_requests:  # Rename local variable to avoid conflict
+            cancel_request["cancel_time"] = cancel_request["cancel_time"].strftime("%Y-%m-%d %H:%M:%S")
+        return jsonify(cancel_requests)
+
+    if request.method == 'POST':
+        data = request.json
+        cancel_id = data.get('cancel_id')
+        action = data.get('action')  # "approve" or "deny"
+
+        if not cancel_id or action not in ["approve", "deny"]:
+            return jsonify({"error": "Invalid cancel ID or action"}), 400
+
+        cancel_request = db['cancellations'].find_one({"cancel_id": cancel_id})
+        if not cancel_request:
+            return jsonify({"error": "Cancel request not found"}), 404
+
+        if action == "approve":
+            orders_collection.delete_one({"order_id": cancel_request["order_id"]})
+        db['cancellations'].delete_one({"cancel_id": cancel_id})
+
+        # Add notification
+        noti_id = db['notifications'].count_documents({}) + 1
+        db['notifications'].insert_one({
+            "noti_id": noti_id,
+            "noti_type": "cancel request",
+            "noti_update": "approved" if action == "approve" else "denied"
+        })
+
+        return jsonify({"message": f"Cancel request {action} successfully"}), 200
+
+@app.route('/api/notifications', methods=['GET'])
+def get_notifications():
+    notifications = list(db['notifications'].find({}, {"_id": 0}))
+    return jsonify(notifications)
 
 if __name__ == '__main__':
     app.run(debug=True)
